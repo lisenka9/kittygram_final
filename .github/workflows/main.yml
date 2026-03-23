@@ -1,0 +1,101 @@
+name: Kittygram CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+  DOCKERHUB_PASSWORD: ${{ secrets.DOCKERHUB_PASSWORD }}
+  TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+  TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+      
+      - name: Run ruff (linter)
+        run: |
+          cd backend
+          pip install ruff
+          ruff check .
+      
+      - name: Run Django tests
+        run: |
+          cd backend
+          python manage.py test
+      
+      - name: Test frontend
+        run: |
+          cd frontend
+          npm ci
+          npm test -- --passWithNoTests
+
+  build_and_push:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_PASSWORD }}
+      
+      - name: Build and push backend
+        uses: docker/build-push-action@v4
+        with:
+          context: ./backend
+          push: true
+          tags: ${{ env.DOCKERHUB_USERNAME }}/kittygram_backend:latest
+      
+      - name: Build and push frontend
+        uses: docker/build-push-action@v4
+        with:
+          context: ./frontend
+          push: true
+          tags: ${{ env.DOCKERHUB_USERNAME }}/kittygram_frontend:latest
+      
+      - name: Build and push gateway
+        uses: docker/build-push-action@v4
+        with:
+          context: ./nginx
+          push: true
+          tags: ${{ env.DOCKERHUB_USERNAME }}/kittygram_gateway:latest
+      
+      - name: Send Telegram notification
+        if: always()
+        uses: appleboy/telegram-action@master
+        with:
+          to: ${{ env.TELEGRAM_CHAT_ID }}
+          token: ${{ env.TELEGRAM_TOKEN }}
+          message: |
+            Kittygram CI/CD
+            
+            Статус: ${{ job.status }}
+            Репозиторий: ${{ github.repository }}
+            Ветка: ${{ github.ref_name }}
+            Коммит: ${{ github.sha }}
+            Автор: ${{ github.actor }}
+            
+            Образы успешно загружены на Docker Hub!
